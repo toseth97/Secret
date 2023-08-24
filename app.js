@@ -3,15 +3,31 @@ require("dotenv").config();
 const express = require("express");
 const mongoose = require("mongoose");
 const bodyParser = require("body-parser");
-const encrypt = require("mongoose-encryption");
+const session = require("express-session");
+const passport = require("passport");
+const passportLocalMongoose = require("passport-local-mongoose");
+//const bcrypt = require("bcrypt");
+//const md5 = require("md5");
 //stating express app
 const app = express();
+//const saltRounds = 12;
 
 //Setting up middleware
 
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(express.static("public"));
 app.set("view engine", "ejs");
+app.use(
+    session({
+        secret: "This is not just private, it is a ultmost secret",
+        resave: false,
+        saveUninitialized: false,
+        cookie: { secure: true },
+    })
+);
+app.use(passport.initialize());
+app.use(passport.session());
+
 //connecting to mongoDB atlas
 var uri = "mongodb://127.0.0.1:27017/secretapp";
 
@@ -27,14 +43,15 @@ const userScheme = new mongoose.Schema({
     password: String,
 });
 
+userScheme.plugin(passportLocalMongoose); //using local strategy for authentication
 //random string for encryption and decryption of passwords
 
-userScheme.plugin(encrypt, {
-    secret: process.env.SECRET,
-    encryptedFields: ["password"],
-});
-
 const User = mongoose.model("user", userScheme);
+
+passport.use(User.createStrategy());
+
+passport.serializeUser(User.serializeUser());
+passport.deserializeUser(User.deserializeUser());
 
 app.get("/", (req, res) => {
     res.render("home");
@@ -51,10 +68,9 @@ app.route("/register")
         (async () => {
             const newUser = new User({
                 email: username,
-                password: password,
+                password: hash,
             });
             await newUser.save();
-            console.log(newUser);
             res.render("secrets");
         })();
     });
@@ -71,13 +87,19 @@ app.route("/login")
             const user = await User.findOne({
                 email: username,
             });
-
             if (user) {
-                if (user.password === password) {
-                    res.render("secrets");
-                } else {
-                    res.send("Incorrect Passord");
-                }
+                bcrypt.compare(
+                    req.body.password,
+                    user.password,
+                    async function (err, result) {
+                        // result == true
+                        if (result === true) {
+                            res.render("secrets");
+                        } else {
+                            res.send("Incorrect Passord");
+                        }
+                    }
+                );
             } else {
                 res.send("No such user");
             }
