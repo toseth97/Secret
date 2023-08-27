@@ -1,57 +1,75 @@
-//jshint esversion:6
 require("dotenv").config();
 const express = require("express");
 const mongoose = require("mongoose");
 const bodyParser = require("body-parser");
-const session = require("express-session");
 const passport = require("passport");
-const passportLocalMongoose = require("passport-local-mongoose");
+const session = require("express-session");
 //const bcrypt = require("bcrypt");
-//const md5 = require("md5");
-//stating express app
 const app = express();
-//const saltRounds = 12;
+const passportLocalMongoose = require("passport-local-mongoose");
+const LocalStrategy = require("passport-local").Strategy;
+const FacebookStrategy = require("passport-facebook");
+const findOrCreate = require("mongoose-findorcreate");
 
-//Setting up middleware
-
+//middle ware
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(express.static("public"));
 app.set("view engine", "ejs");
 app.use(
     session({
-        secret: "This is not just private, it is a ultmost secret",
+        secret: process.env.SECRET,
         resave: false,
-        saveUninitialized: false,
-        cookie: { secure: true },
+        saveUninitialized: true,
     })
 );
+
 app.use(passport.initialize());
 app.use(passport.session());
 
-//connecting to mongoDB atlas
-var uri = "mongodb://127.0.0.1:27017/secretapp";
+//const saltRound = 12;
 
-connectDB().catch((err) => {
-    console.log(err.message);
-});
+connectDB();
 async function connectDB() {
-    await mongoose.connect(uri).then(console.log("Connect to DB"));
+    await mongoose
+        .connect("mongodb://127.0.0.1:27017/authtest")
+        .then(console.log("Connected to DB"));
 }
 
-const userScheme = new mongoose.Schema({
-    email: String,
+const userSchema = new mongoose.Schema({
+    username: String,
     password: String,
 });
 
-userScheme.plugin(passportLocalMongoose); //using local strategy for authentication
-//random string for encryption and decryption of passwords
+userSchema.plugin(passportLocalMongoose);
+userSchema.plugin(findOrCreate);
 
-const User = mongoose.model("user", userScheme);
+const User = mongoose.model("user", userSchema);
 
 passport.use(User.createStrategy());
+passport.serializeUser(function (user, done) {
+    done(null, user);
+});
 
-passport.serializeUser(User.serializeUser());
-passport.deserializeUser(User.deserializeUser());
+passport.deserializeUser(function (user, done) {
+    done(null, user);
+});
+
+passport.use(
+    new FacebookStrategy(
+        {
+            clientID: process.env.APP_ID,
+            clientSecret: process.env.APP_SECRET,
+            callbackURL: "http://localhost:8080/auth/facebook/secret",
+            profileFields: ["id", "displayName", "email"],
+        },
+        function (accessToken, refreshToken, profile, cb) {
+            console.log(profile);
+            User.findOrCreate({ facebookId: profile.id }, function (err, user) {
+                return cb(err, user);
+            });
+        }
+    )
+);
 
 app.get("/", (req, res) => {
     res.render("home");
@@ -61,59 +79,74 @@ app.route("/register")
     .get((req, res) => {
         res.render("register");
     })
-    .post((req, res) => {
+    .post(async (req, res) => {
         const username = req.body.username;
         const password = req.body.password;
 
-        (async () => {
-            const newUser = new User({
-                email: username,
-                password: hash,
-            });
-            await newUser.save();
-            res.render("secrets");
-        })();
-    });
-
-app.route("/login")
-    .get((req, res) => {
-        res.render("login");
-    })
-    .post((req, res) => {
-        const username = req.body.username;
-        const password = req.body.password;
-
-        (async () => {
-            const user = await User.findOne({
-                email: username,
-            });
-            if (user) {
-                bcrypt.compare(
-                    req.body.password,
-                    user.password,
-                    async function (err, result) {
-                        // result == true
-                        if (result === true) {
-                            res.render("secrets");
-                        } else {
-                            res.send("Incorrect Passord");
-                        }
-                    }
-                );
-            } else {
-                res.send("No such user");
+        User.register(
+            new User({ username: username }),
+            password,
+            async (err, user) => {
+                if (err) {
+                    console.log(err.message);
+                    res.render("register");
+                } else {
+                    // passport.authenticate("local", (req, res) => {
+                    //     res.redirect("/secret");
+                    // });
+                    const authenticate = User.authenticate("local");
+                    authenticate(username, password, (err, result) => {
+                        res.redirect("/secret");
+                    });
+                }
             }
-        })();
+        );
     });
 
-app.get("/logout", (req, res) => {
-    res.redirect("/login");
+app.get(
+    "/auth/facebook",
+    passport.authenticate("facebook", { scope: ["profile"] })
+);
+
+app.get(
+    "/auth/facebook/secret",
+    passport.authenticate("facebook", { failureRedirect: "/login" }),
+    function (req, res) {
+        // Successful authentication, redirect home.
+        res.redirect("/secret");
+    }
+);
+
+app.get("/secret", async (req, res) => {
+    console.log(req.isAuthenticated);
+    if (req.isAuthenticated()) {
+        res.render("secret");
+    } else {
+        res.redirect("/login");
+    }
 });
 
-app.get("/secrets", (req, res) => {
-    res.render("secrets");
+app.route("/login").get((req, res) => {
+    if (req.isAuthenticated()) {
+        res.redirect("/secret");
+    } else {
+        res.render("login");
+    }
 });
-//server port
-app.listen(process.env.PORT || 3000, () => {
-    console.log(`Server started on ${process.env.PORT || 3000}`);
+// .post(async (req, res) => {
+//     const username = req.body.username;
+//     const password = req.body.password;
+// });
+
+app.get("/logout", async (req, res) => {
+    req.logout((err, result) => {
+        if (!err) {
+            req.isAuthenticated = false;
+            res.redirect("/login");
+        }
+    });
+});
+
+app.listen(8080, () => {
+    console.log("server started");
 });
